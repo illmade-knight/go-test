@@ -11,10 +11,10 @@ require (
 	github.com/eclipse/paho.mqtt.golang v1.5.0
 	github.com/go-redis/redis/v8 v8.11.5
 	github.com/google/uuid v1.6.0
-	github.com/illmade-knight/go-iot v0.0.18
 	github.com/rs/zerolog v1.34.0
 	github.com/stretchr/testify v1.10.0
 	github.com/testcontainers/testcontainers-go v0.38.0
+	golang.org/x/oauth2 v0.30.0
 	google.golang.org/api v0.243.0
 	google.golang.org/grpc v1.74.2
 )
@@ -110,7 +110,6 @@ require (
 	golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56 // indirect
 	golang.org/x/mod v0.25.0 // indirect
 	golang.org/x/net v0.42.0 // indirect
-	golang.org/x/oauth2 v0.30.0 // indirect
 	golang.org/x/sync v0.16.0 // indirect
 	golang.org/x/sys v0.34.0 // indirect
 	golang.org/x/text v0.27.0 // indirect

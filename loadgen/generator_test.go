@@ -3,7 +3,7 @@ package loadgen_test
 import (
 	"context"
 	"errors"
-	"github.com/illmade-knight/go-iot/helpers/loadgen"
+	"github.com/illmade-knight/go-test/loadgen"
 	"sync"
 	"testing"
 	"time"

@@ -9,8 +9,7 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/illmade-knight/go-iot/helpers/emulators"
-	"github.com/illmade-knight/go-iot/helpers/loadgen"
+	"github.com/illmade-knight/go-test/emulators"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
