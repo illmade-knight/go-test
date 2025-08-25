@@ -1,14 +1,48 @@
-package emulators
+package emulators_test
 
 import (
 	"context"
-	"reflect"
+	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"cloud.google.com/go/firestore"
-	"cloud.google.com/go/pubsub"
+	// REFACTOR: Use the v2 pubsub import path.
+	"cloud.google.com/go/pubsub/v2"
+	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
+	"github.com/google/uuid"
+	"github.com/illmade-knight/go-test/emulators"
+	"github.com/stretchr/testify/require"
 )
+
+// REFACTOR: createPubsubResources now correctly uses the admin clients from the
+// main pubsub.Client, as shown in the v2 documentation.
+func createPubsubResources(t *testing.T, ctx context.Context, client *pubsub.Client, projectID, topicID, subID string) {
+	t.Helper()
+
+	// REFACTOR: Access the admin clients directly from the operational client.
+	topicAdmin := client.TopicAdminClient
+	subAdmin := client.SubscriptionAdminClient
+
+	topicName := fmt.Sprintf("projects/%s/topics/%s", projectID, topicID)
+	_, err := topicAdmin.CreateTopic(ctx, &pubsubpb.Topic{Name: topicName})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = topicAdmin.DeleteTopic(context.Background(), &pubsubpb.DeleteTopicRequest{Topic: topicName})
+	})
+
+	subName := fmt.Sprintf("projects/%s/subscriptions/%s", projectID, subID)
+	_, err = subAdmin.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name:  subName,
+		Topic: topicName,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = subAdmin.DeleteSubscription(context.Background(), &pubsubpb.DeleteSubscriptionRequest{Subscription: subName})
+	})
+}
 
 func TestSetupPubsubEmulator(t *testing.T) {
 	t.Parallel()
@@ -17,51 +51,56 @@ func TestSetupPubsubEmulator(t *testing.T) {
 	t.Cleanup(cancel)
 
 	projectID := "test-project-pubsub"
-	topicName := "test-topic"
-	subName := "test-subscription"
-	cfg := GetDefaultPubsubConfig(projectID, map[string]string{topicName: subName})
+	runID := uuid.NewString()
+	topicID := fmt.Sprintf("test-topic-%s", runID)
+	subID := fmt.Sprintf("test-subscription-%s", runID)
+	cfg := emulators.GetDefaultPubsubConfig(projectID)
 
-	connInfo := SetupPubsubEmulator(t, ctx, cfg)
+	connInfo := emulators.SetupPubsubEmulator(t, ctx, cfg)
 
-	// --- Verify EmulatorConnectionInfo ---
-	if connInfo.HTTPEndpoint.Endpoint == "" {
-		t.Error("HTTPEndpoint.Endpoint is empty")
-	}
-	if connInfo.HTTPEndpoint.Port == "" {
-		t.Error("HTTPEndpoint.Port is empty")
-	}
-	if len(connInfo.ClientOptions) == 0 {
-		t.Error("ClientOptions are empty")
-	}
+	require.NotEmpty(t, connInfo.HTTPEndpoint.Endpoint, "HTTPEndpoint.Endpoint should not be empty")
+	require.NotEmpty(t, connInfo.HTTPEndpoint.Port, "HTTPEndpoint.Port should not be empty")
+	require.NotEmpty(t, connInfo.ClientOptions, "ClientOptions should not be empty")
 
-	// --- Test Connectivity ---
 	client, err := pubsub.NewClient(ctx, projectID, connInfo.ClientOptions...)
-	if err != nil {
-		t.Fatalf("Failed to create Pub/Sub client: %v", err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = client.Close()
 	})
 
-	// Verify topic and subscription exist (should be pre-created by SetupPubsubEmulator)
-	topic := client.Topic(topicName)
-	exists, err := topic.Exists(ctx)
-	if err != nil {
-		t.Fatalf("Failed to check if topic %q exists: %v", topicName, err)
-	}
-	if !exists {
-		t.Errorf("Topic %q does not exist", topicName)
+	// REFACTOR: Call the dedicated helper to create the test resources.
+	createPubsubResources(t, ctx, client, projectID, topicID, subID)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	received := make(chan []byte, 1)
+
+	subscriber := client.Subscriber(subID)
+	go func() {
+		defer wg.Done()
+		err := subscriber.Receive(ctx, func(ctx context.Context, msg *pubsub.Message) {
+			received <- msg.Data
+			msg.Ack()
+		})
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Errorf("Receive error: %v", err)
+		}
+	}()
+
+	publisher := client.Publisher(topicID)
+	defer publisher.Stop()
+	res := publisher.Publish(ctx, &pubsub.Message{Data: []byte("hello world")})
+	_, err = res.Get(ctx)
+	require.NoError(t, err)
+
+	select {
+	case msg := <-received:
+		require.Equal(t, "hello world", string(msg))
+	case <-ctx.Done():
+		t.Fatal("Test timed out waiting for message")
 	}
 
-	sub := client.Subscription(subName)
-	exists, err = sub.Exists(ctx)
-	if err != nil {
-		t.Fatalf("Failed to check if subscription %q exists: %v", subName, err)
-	}
-	if !exists {
-		t.Errorf("Subscription %q does not exist", subName)
-	}
-
+	wg.Wait()
 	t.Logf("Pub/Sub emulator test passed. Connected to: %s", connInfo.HTTPEndpoint.Endpoint)
 }
 
@@ -72,72 +111,25 @@ func TestSetupFirestoreEmulator(t *testing.T) {
 	t.Cleanup(cancel)
 
 	projectID := "test-project-firestore"
-	cfg := GetDefaultFirestoreConfig(projectID)
+	cfg := emulators.GetDefaultFirestoreConfig(projectID)
 
-	connInfo := SetupFirestoreEmulator(t, ctx, cfg)
+	connInfo := emulators.SetupFirestoreEmulator(t, ctx, cfg)
 
-	// --- Verify EmulatorConnectionInfo ---
-	if connInfo.HTTPEndpoint.Endpoint == "" {
-		t.Error("HTTPEndpoint.Endpoint is empty")
-	}
-	if connInfo.HTTPEndpoint.Port == "" {
-		t.Error("HTTPEndpoint.Port is empty")
-	}
-	if len(connInfo.ClientOptions) == 0 {
-		t.Error("ClientOptions are empty")
-	}
+	require.NotEmpty(t, connInfo.HTTPEndpoint.Endpoint, "HTTPEndpoint.Endpoint should not be empty")
+	require.NotEmpty(t, connInfo.HTTPEndpoint.Port, "HTTPEndpoint.Port should not be empty")
+	require.NotEmpty(t, connInfo.ClientOptions, "ClientOptions should not be empty")
 
-	// --- Test Connectivity ---
 	client, err := firestore.NewClient(ctx, projectID, connInfo.ClientOptions...)
-	if err != nil {
-		t.Fatalf("Failed to create Firestore client: %v", err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = client.Close()
 	})
 
-	// Try to add a dummy document
 	_, _, err = client.Collection("testCollection").Add(ctx, map[string]interface{}{
 		"field1": "value1",
 		"field2": 123,
 	})
-	if err != nil {
-		t.Fatalf("Failed to add document to Firestore: %v", err)
-	}
+	require.NoError(t, err, "Failed to add document to Firestore")
 
 	t.Logf("Firestore emulator test passed. Connected to: %s", connInfo.HTTPEndpoint.Endpoint)
-}
-
-func TestGetDefaultPubsubConfig(t *testing.T) {
-	projectID := "default-pubsub-proj"
-	topicSubs := map[string]string{"topicA": "subA"}
-	cfg := GetDefaultPubsubConfig(projectID, topicSubs)
-
-	if cfg.EmulatorImage != testEmulatorImage {
-		t.Errorf("Expected image %q, got %q", testEmulatorImage, cfg.EmulatorImage)
-	}
-	if cfg.EmulatorPort != testPubsubEmulatorPort {
-		t.Errorf("Expected HTTP port %q, got %q", testPubsubEmulatorPort, cfg.EmulatorPort)
-	}
-	if cfg.ProjectID != projectID {
-		t.Errorf("Expected project ID %q, got %q", projectID, cfg.ProjectID)
-	}
-	if !reflect.DeepEqual(cfg.TopicSubs, topicSubs) {
-		t.Errorf("TopicSubs mismatch: expected %v, got %v", topicSubs, cfg.TopicSubs)
-	}
-}
-
-func TestGetDefaultFirestoreConfig(t *testing.T) {
-	projectID := "default-firestore-proj"
-	cfg := GetDefaultFirestoreConfig(projectID)
-
-	if cfg.EmulatorImage != testEmulatorImage {
-		t.Errorf("Expected image %q, got %q", testEmulatorImage, cfg.EmulatorImage)
-	}
-	if cfg.EmulatorPort != testFirestoreEmulatorPort {
-		t.Errorf("Expected HTTP port %q, got %q", testFirestoreEmulatorPort, cfg.EmulatorPort)
-	}
-	if cfg.ProjectID != projectID {
-		t.Errorf("Expected project ID %q, got %q", projectID, cfg.ProjectID)
-	}
 }

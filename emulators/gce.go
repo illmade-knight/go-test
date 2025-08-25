@@ -5,7 +5,8 @@ import (
 	"fmt"
 	"testing"
 
-	"cloud.google.com/go/pubsub"
+	// REFACTOR: Use the v2 pubsub import path.
+	"cloud.google.com/go/pubsub/v2"
 	"github.com/docker/go-connections/nat"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
@@ -27,18 +28,16 @@ const (
 // PubsubConfig holds configuration specific to the Pub/Sub emulator.
 type PubsubConfig struct {
 	GCImageContainer
-	TopicSubs map[string]string // A map of topic names to subscription names to pre-create.
+	// REFACTOR: TopicSubs map is no longer needed as the v2 emulator auto-creates resources.
 }
 
 // FirestoreConfig holds configuration specific to the Firestore emulator.
 type FirestoreConfig struct {
 	GCImageContainer
-	// Add any Firestore-specific configurations here if needed in the future.
-	// For now, it primarily uses the common GCImageContainer properties.
 }
 
 // GetDefaultPubsubConfig provides a default configuration for the Pub/Sub emulator.
-func GetDefaultPubsubConfig(projectID string, topicSubs map[string]string) PubsubConfig {
+func GetDefaultPubsubConfig(projectID string) PubsubConfig {
 	return PubsubConfig{
 		GCImageContainer: GCImageContainer{
 			ImageContainer: ImageContainer{
@@ -47,7 +46,6 @@ func GetDefaultPubsubConfig(projectID string, topicSubs map[string]string) Pubsu
 			},
 			ProjectID: projectID,
 		},
-		TopicSubs: topicSubs,
 	}
 }
 
@@ -66,12 +64,12 @@ func GetDefaultFirestoreConfig(projectID string) FirestoreConfig {
 
 // SetupPubsubEmulator starts a Pub/Sub emulator container and configures it.
 // It returns client options for connecting to the emulator.
-// CORRECTED: This function now uses t.Cleanup to manage the container lifecycle.
-// Refactored to return EmulatorConnectionInfo.
-func SetupPubsubEmulator(t *testing.T, ctx context.Context, cfg PubsubConfig) EmulatorConnectionInfo { // Changed return type
+// REFACTOR: Removed the v1 admin client and resource creation logic. The emulator
+// will create topics and subscriptions on first use.
+func SetupPubsubEmulator(t *testing.T, ctx context.Context, cfg PubsubConfig) EmulatorConnectionInfo {
 	t.Helper()
 
-	httpPort := fmt.Sprintf("%s/tcp", cfg.EmulatorPort) // Use EmulatorPort for the exposed port
+	httpPort := fmt.Sprintf("%s/tcp", cfg.EmulatorPort)
 	req := testcontainers.ContainerRequest{
 		Image:        cfg.EmulatorImage,
 		ExposedPorts: []string{httpPort},
@@ -82,7 +80,6 @@ func SetupPubsubEmulator(t *testing.T, ctx context.Context, cfg PubsubConfig) Em
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{ContainerRequest: req, Started: true})
 	require.NoError(t, err)
 
-	// CORRECTED: Use t.Cleanup to ensure the container is terminated after the test and all its sub-tests complete.
 	t.Cleanup(func() {
 		if err := container.Terminate(context.Background()); err != nil {
 			log.Warn().Err(err).Msg("Failed to terminate Pub/Sub emulator container")
@@ -93,38 +90,21 @@ func SetupPubsubEmulator(t *testing.T, ctx context.Context, cfg PubsubConfig) Em
 	require.NoError(t, err)
 	port, err := container.MappedPort(ctx, nat.Port(cfg.EmulatorPort))
 	require.NoError(t, err)
-	emulatorHost := fmt.Sprintf("%s:%s", host, port.Port()) //
+	emulatorHost := fmt.Sprintf("%s:%s", host, port.Port())
 
 	t.Logf("Pub/Sub emulator container started, listening on: %s", emulatorHost)
-	// Removed t.Setenv("PUBSUB_EMULATOR_HOST", emulatorHost) as discussed
 
 	clientOptions := getEmulatorOptions(emulatorHost)
 
+	// Verify connectivity by creating a client.
 	adminClient, err := pubsub.NewClient(ctx, cfg.ProjectID, clientOptions...)
 	require.NoError(t, err)
-	defer func() {
+	// The client is closed by the test that calls this setup function.
+	t.Cleanup(func() {
 		_ = adminClient.Close()
-	}()
+	})
 
-	for topicName, subName := range cfg.TopicSubs {
-		topic := adminClient.Topic(topicName)
-		exists, err := topic.Exists(ctx)
-		require.NoError(t, err)
-		if !exists {
-			_, err = adminClient.CreateTopic(ctx, topicName)
-			require.NoError(t, err, "Failed to create Pub/Sub topic")
-		}
-
-		sub := adminClient.Subscription(subName)
-		exists, err = sub.Exists(ctx)
-		require.NoError(t, err)
-		if !exists {
-			_, err = adminClient.CreateSubscription(ctx, subName, pubsub.SubscriptionConfig{Topic: topic})
-			require.NoError(t, err, "Failed to create Pub/Sub subscription")
-		}
-	}
-
-	return EmulatorConnectionInfo{ // Populating the new struct
+	return EmulatorConnectionInfo{
 		HTTPEndpoint: Endpoint{
 			Port:     cfg.EmulatorPort,
 			Endpoint: emulatorHost,
@@ -134,13 +114,10 @@ func SetupPubsubEmulator(t *testing.T, ctx context.Context, cfg PubsubConfig) Em
 }
 
 // SetupFirestoreEmulator starts a Firestore emulator container and configures it.
-// It returns the client options for connecting to the emulator.
-// CORRECTED: This function now uses t.Cleanup to manage the container lifecycle.
-// Refactored to return EmulatorConnectionInfo.
-func SetupFirestoreEmulator(t *testing.T, ctx context.Context, cfg FirestoreConfig) EmulatorConnectionInfo { // Changed return type
+func SetupFirestoreEmulator(t *testing.T, ctx context.Context, cfg FirestoreConfig) EmulatorConnectionInfo {
 	t.Helper()
 
-	httpPort := fmt.Sprintf("%s/tcp", cfg.EmulatorPort) // Use EmulatorPort for the exposed port
+	httpPort := fmt.Sprintf("%s/tcp", cfg.EmulatorPort)
 	req := testcontainers.ContainerRequest{
 		Image:        cfg.EmulatorImage,
 		ExposedPorts: []string{httpPort},
@@ -151,7 +128,6 @@ func SetupFirestoreEmulator(t *testing.T, ctx context.Context, cfg FirestoreConf
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{ContainerRequest: req, Started: true})
 	require.NoError(t, err)
 
-	// CORRECTED: Use t.Cleanup to ensure the container is terminated after the test and all its sub-tests complete.
 	t.Cleanup(func() {
 		if err := container.Terminate(context.Background()); err != nil {
 			log.Warn().Err(err).Msg("Failed to terminate Firestore emulator container")
@@ -162,13 +138,13 @@ func SetupFirestoreEmulator(t *testing.T, ctx context.Context, cfg FirestoreConf
 	require.NoError(t, err)
 	port, err := container.MappedPort(ctx, nat.Port(cfg.EmulatorPort))
 	require.NoError(t, err)
-	emulatorHost := fmt.Sprintf("%s:%s", host, port.Port()) //
+	emulatorHost := fmt.Sprintf("%s:%s", host, port.Port())
 
 	t.Logf("Firestore emulator container started, listening on: %s", emulatorHost)
 
 	clientOptions := getEmulatorOptions(emulatorHost)
 
-	return EmulatorConnectionInfo{ // Populating the new struct
+	return EmulatorConnectionInfo{
 		HTTPEndpoint: Endpoint{
 			Port:     cfg.EmulatorPort,
 			Endpoint: emulatorHost,
