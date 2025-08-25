@@ -1,11 +1,12 @@
 package emulators
 
 import (
-	"cloud.google.com/go/bigquery"
 	"context"
 	"reflect" // Added for reflect.DeepEqual in TestGetDefaultBigQueryConfig
 	"testing"
 	"time"
+
+	"cloud.google.com/go/bigquery"
 )
 
 func TestSetupBigQueryEmulator(t *testing.T) {
@@ -14,7 +15,7 @@ func TestSetupBigQueryEmulator(t *testing.T) {
 	// Use a context with timeout for *test operations*, not container lifecycle.
 	// Pass context.Background() or a longer-lived context to testcontainers.GenericContainer.
 	testCtx, testCancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer testCancel()
+	t.Cleanup(testCancel)
 
 	projectID := "test-project-bigquery"
 	datasetName := "test_dataset"
@@ -56,7 +57,9 @@ func TestSetupBigQueryEmulator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create BigQuery client: %v", err)
 	}
-	defer client.Close()
+	t.Cleanup(func() {
+		_ = client.Close()
+	})
 
 	// Verify dataset and table exist (they should be pre-created by SetupBigQueryEmulator)
 	ds := client.Dataset(datasetName)

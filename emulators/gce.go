@@ -1,15 +1,16 @@
 package emulators
 
 import (
-	"cloud.google.com/go/pubsub"
 	"context"
 	"fmt"
+	"testing"
+
+	"cloud.google.com/go/pubsub"
 	"github.com/docker/go-connections/nat"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
-	"testing"
 )
 
 const (
@@ -101,7 +102,9 @@ func SetupPubsubEmulator(t *testing.T, ctx context.Context, cfg PubsubConfig) Em
 
 	adminClient, err := pubsub.NewClient(ctx, cfg.ProjectID, clientOptions...)
 	require.NoError(t, err)
-	defer adminClient.Close()
+	defer func() {
+		_ = adminClient.Close()
+	}()
 
 	for topicName, subName := range cfg.TopicSubs {
 		topic := adminClient.Topic(topicName)

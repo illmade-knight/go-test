@@ -10,7 +10,7 @@ func TestSetupGCSEmulator(t *testing.T) {
 
 	// Use a context with timeout for *test operations*, not container lifecycle.
 	testCtx, testCancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer testCancel()
+	t.Cleanup(testCancel)
 
 	projectID := "test-project-gcs"
 	baseBucket := "test-bucket"

@@ -2,10 +2,11 @@ package emulators
 
 import (
 	"context"
-	"github.com/go-redis/redis/v8"
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
+
+	"github.com/redis/go-redis/v9"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSetupRedisContainer(t *testing.T) {
@@ -13,7 +14,7 @@ func TestSetupRedisContainer(t *testing.T) {
 
 	// Use a context with timeout for *test operations*, not container lifecycle.
 	testCtx, testCancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer testCancel()
+	t.Cleanup(testCancel)
 
 	cfg := GetDefaultRedisImageContainer()
 	// Pass context.Background() to SetupRedisContainer for container lifecycle
@@ -32,11 +33,11 @@ func TestSetupRedisContainer(t *testing.T) {
 		DB:   0, // use default DB
 	})
 
-	defer func() {
+	t.Cleanup(func() {
 		if err := rdb.Close(); err != nil {
 			t.Logf("Error closing Redis client: %v", err)
 		}
-	}()
+	})
 
 	pong, err := rdb.Ping(testCtx).Result() // Use testCtx for client operation
 	require.NoError(t, err, "Failed to ping Redis")

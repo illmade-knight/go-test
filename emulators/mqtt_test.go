@@ -27,7 +27,9 @@ func TestSetupMosquittoContainer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create MQTT publisher: %v", err) //
 	}
-	defer publisher.Disconnect(250) // Disconnect client cleanly
+	t.Cleanup(func() {
+		publisher.Disconnect(250) // Disconnect client cleanly
+	})
 
 	if !publisher.IsConnected() {
 		t.Error("MQTT publisher is not connected") //

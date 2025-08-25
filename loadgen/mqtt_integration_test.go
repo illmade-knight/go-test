@@ -20,7 +20,7 @@ func TestMqttClient_Publish_PayloadFormat(t *testing.T) {
 	// Arrange
 	logger := zerolog.Nop()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	t.Cleanup(cancel)
 
 	// 1. Start an MQTT emulator.
 	mqttConnInfo := emulators.SetupMosquittoContainer(t, ctx, emulators.GetDefaultMqttImageContainer())
@@ -30,7 +30,9 @@ func TestMqttClient_Publish_PayloadFormat(t *testing.T) {
 	publisher := loadgen.NewMqttClient(mqttConnInfo.EmulatorAddress, topicPattern, 1, logger)
 	err := publisher.Connect()
 	require.NoError(t, err)
-	defer publisher.Disconnect()
+	t.Cleanup(func() {
+		publisher.Disconnect()
+	})
 
 	// 3. Create a standard Paho client to subscribe and receive the message.
 	messageCh := make(chan []byte, 1)
@@ -39,7 +41,9 @@ func TestMqttClient_Publish_PayloadFormat(t *testing.T) {
 	token := subscriber.Connect()
 	require.True(t, token.WaitTimeout(5*time.Second), "subscriber failed to connect")
 	require.NoError(t, token.Error())
-	defer subscriber.Disconnect(250)
+	t.Cleanup(func() {
+		subscriber.Disconnect(250)
+	})
 
 	// Subscribe to the specific topic we expect the publisher to use.
 	topicToReceive := "test/device-123/data"

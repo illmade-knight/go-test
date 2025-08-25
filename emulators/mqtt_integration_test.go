@@ -2,11 +2,12 @@ package emulators
 
 import (
 	"context"
-	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/stretchr/testify/require"
 	"sync"
 	"testing"
 	"time"
+
+	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/stretchr/testify/require"
 )
 
 // TestMqttPublishSubscribeIntegration tests the full publish-subscribe flow
@@ -38,7 +39,9 @@ func TestMqttPublishSubscribeIntegration(t *testing.T) {
 	if token := subscriber.Connect(); token.WaitTimeout(10*time.Second) && token.Error() != nil {
 		t.Fatalf("Failed to connect MQTT subscriber: %v", token.Error())
 	}
-	defer subscriber.Disconnect(250)
+	t.Cleanup(func() {
+		subscriber.Disconnect(250)
+	})
 	require.True(t, subscriber.IsConnected(), "Subscriber should be connected")
 
 	t.Logf("Subscriber connected. Subscribing to topic: %s", testTopic)
@@ -54,7 +57,10 @@ func TestMqttPublishSubscribeIntegration(t *testing.T) {
 	publisherClientID := "test-publisher-client"
 	publisher, err := CreateTestMqttPublisher(brokerURL, publisherClientID)
 	require.NoError(t, err, "Failed to create MQTT publisher")
-	defer publisher.Disconnect(250)
+	t.Cleanup(func() {
+		publisher.Disconnect(250)
+	})
+
 	require.True(t, publisher.IsConnected(), "Publisher should be connected")
 	t.Log("Publisher connected.")
 

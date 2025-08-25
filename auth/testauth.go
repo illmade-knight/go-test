@@ -1,14 +1,15 @@
 package auth
 
 import (
-	"cloud.google.com/go/pubsub"
 	"context"
 	"encoding/json"
-	"golang.org/x/oauth2/google"
-	"google.golang.org/api/idtoken"
 	"os"
 	"strings"
 	"testing"
+
+	"cloud.google.com/go/pubsub"
+	"golang.org/x/oauth2/google"
+	"google.golang.org/api/idtoken"
 )
 
 // CheckGCPAuth is a helper that fails fast if the test is not configured to run

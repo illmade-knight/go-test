@@ -1,16 +1,17 @@
 package emulators
 
 import (
-	"cloud.google.com/go/storage"
 	"context"
 	"fmt"
+	"testing"
+	"time"
+
+	"cloud.google.com/go/storage"
 	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"google.golang.org/api/option"
-	"testing"
-	"time"
 )
 
 const (

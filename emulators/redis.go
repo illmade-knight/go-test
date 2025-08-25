@@ -3,12 +3,13 @@ package emulators
 import (
 	"context"
 	"fmt"
+	"testing"
+	"time"
+
 	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
-	"testing"
-	"time"
 )
 
 const (

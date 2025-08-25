@@ -1,16 +1,17 @@
 package emulators
 
 import (
-	"cloud.google.com/go/bigquery"
 	"context"
 	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"cloud.google.com/go/bigquery"
 	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
-	"strings"
-	"testing"
-	"time"
 )
 
 type BigQueryConfig struct {
@@ -78,7 +79,9 @@ func SetupBigQueryEmulator(t *testing.T, ctx context.Context, cfg BigQueryConfig
 
 	client, err := bigquery.NewClient(ctx, cfg.ProjectID, opts...)
 	require.NoError(t, err)
-	defer client.Close()
+	defer func() {
+		_ = client.Close()
+	}()
 
 	for k, v := range cfg.DatasetTables {
 		err = client.Dataset(k).Create(ctx, &bigquery.DatasetMetadata{Name: k})

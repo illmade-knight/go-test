@@ -1,19 +1,20 @@
 package emulators
 
 import (
-	"cloud.google.com/go/firestore"
-	"cloud.google.com/go/pubsub"
 	"context"
 	"reflect"
 	"testing"
 	"time"
+
+	"cloud.google.com/go/firestore"
+	"cloud.google.com/go/pubsub"
 )
 
 func TestSetupPubsubEmulator(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
+	t.Cleanup(cancel)
 
 	projectID := "test-project-pubsub"
 	topicName := "test-topic"
@@ -38,7 +39,9 @@ func TestSetupPubsubEmulator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create Pub/Sub client: %v", err)
 	}
-	defer client.Close()
+	t.Cleanup(func() {
+		_ = client.Close()
+	})
 
 	// Verify topic and subscription exist (should be pre-created by SetupPubsubEmulator)
 	topic := client.Topic(topicName)
@@ -66,7 +69,7 @@ func TestSetupFirestoreEmulator(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
+	t.Cleanup(cancel)
 
 	projectID := "test-project-firestore"
 	cfg := GetDefaultFirestoreConfig(projectID)
@@ -89,7 +92,9 @@ func TestSetupFirestoreEmulator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create Firestore client: %v", err)
 	}
-	defer client.Close()
+	t.Cleanup(func() {
+		_ = client.Close()
+	})
 
 	// Try to add a dummy document
 	_, _, err = client.Collection("testCollection").Add(ctx, map[string]interface{}{
