@@ -3,7 +3,7 @@ module github.com/illmade-knight/go-test
 go 1.24.0
 
 require (
-	cloud.google.com/go/bigquery v1.69.0
+	cloud.google.com/go/bigquery v1.70.0
 	cloud.google.com/go/firestore v1.18.0
 	cloud.google.com/go/pubsub/v2 v2.0.0
 	cloud.google.com/go/storage v1.56.1
@@ -12,7 +12,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/redis/go-redis/v9 v9.12.1
 	github.com/rs/zerolog v1.34.0
-	github.com/stretchr/testify v1.11.0
+	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.38.0
 	golang.org/x/oauth2 v0.30.0
 	google.golang.org/api v0.248.0

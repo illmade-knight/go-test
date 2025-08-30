@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -12,8 +13,28 @@ import (
 	"google.golang.org/api/idtoken"
 )
 
+// FormatGCPAuthError takes a GCP client error and wraps it in a user-friendly
+// message that provides a clear, actionable solution for the most common cause:
+// expired or missing Application Default Credentials.
+func FormatGCPAuthError(err error) string {
+	return fmt.Sprintf(`
+		---------------------------------------------------------------------
+		GCP AUTHENTICATION FAILED!
+		---------------------------------------------------------------------
+		Could not connect to Google Cloud services. This is likely due to
+		expired or missing Application Default Credentials (ADC).
+
+		To fix this, please run:
+		gcloud auth application-default login
+
+		Original Error: %v
+		---------------------------------------------------------------------
+		`, err)
+}
+
 // CheckGCPAuth is a helper that fails fast if the test is not configured to run
-// with valid Application Default Credentials (ADC) that can invoke Cloud Run.
+// with valid Application Default Credentials (ADC). It now provides a more
+// user-friendly error message for common authentication failures.
 func CheckGCPAuth(t *testing.T) string {
 	t.Helper()
 	projectID := os.Getenv("GCP_PROJECT_ID")
@@ -22,21 +43,16 @@ func CheckGCPAuth(t *testing.T) string {
 	}
 	ctx := context.Background()
 
-	// 1. Check basic connectivity and authentication for resource management.
+	// Check basic connectivity and authentication for resource management.
 	_, err := pubsub.NewClient(ctx, projectID)
 	if err != nil {
-		t.Fatalf(`
-		---------------------------------------------------------------------
-		GCP AUTHENTICATION FAILED!
-		---------------------------------------------------------------------
-		Could not create a Google Cloud client. This is likely due to
-		expired or missing Application Default Credentials (ADC).
-
-		To fix this, please run 'gcloud auth application-default login'.
-
-		Original Error: %v
-		---------------------------------------------------------------------
-		`, err)
+		errStr := err.Error()
+		if strings.Contains(errStr, "dialing") || strings.Contains(errStr, "default credentials") {
+			// BUG FIX: Use a constant format string to satisfy the vet tool.
+			t.Fatalf("%s", FormatGCPAuthError(err))
+		}
+		// For other errors, fail with the original message.
+		t.Fatalf("An unexpected error occurred while connecting to GCP: %v", err)
 	}
 
 	return projectID
@@ -53,18 +69,12 @@ func CheckGCPAdvancedAuth(t *testing.T, logCredentials bool) string {
 	// 1. Check basic connectivity and authentication for resource management.
 	_, err := pubsub.NewClient(ctx, projectID)
 	if err != nil {
-		t.Fatalf(`
-		---------------------------------------------------------------------
-		GCP AUTHENTICATION FAILED!
-		---------------------------------------------------------------------
-		Could not create a Google Cloud client. This is likely due to
-		expired or missing Application Default Credentials (ADC).
-
-		To fix this, please run 'gcloud auth application-default login'.
-
-		Original Error: %v
-		---------------------------------------------------------------------
-		`, err)
+		errStr := err.Error()
+		if strings.Contains(errStr, "dialing") || strings.Contains(errStr, "default credentials") {
+			// BUG FIX: Use a constant format string to satisfy the vet tool.
+			t.Fatalf("%s", FormatGCPAuthError(err))
+		}
+		t.Fatalf("An unexpected error occurred while connecting to GCP: %v", err)
 	}
 
 	// Log the principal associated with the Application Default Credentials.
