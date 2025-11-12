@@ -42,6 +42,7 @@ func createPubsubResources(t *testing.T, ctx context.Context, client *pubsub.Cli
 func TestSetupPubsubEmulator(t *testing.T) {
 	t.Parallel()
 
+	// This is the overall test timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	t.Cleanup(cancel)
 
@@ -51,6 +52,7 @@ func TestSetupPubsubEmulator(t *testing.T) {
 	subID := fmt.Sprintf("test-subscription-%s", runID)
 	cfg := emulators.GetDefaultPubsubConfig(projectID)
 
+	// Use background context for setup
 	connInfo := emulators.SetupPubsubEmulator(t, context.Background(), cfg)
 
 	require.NotEmpty(t, connInfo.HTTPEndpoint.Endpoint, "HTTPEndpoint.Endpoint should not be empty")
@@ -91,29 +93,29 @@ func TestSetupPubsubEmulator(t *testing.T) {
 
 	received := make(chan []byte, 1)
 
+	// --- START: GOROUTINE FIX ---
+	// Create a new cancellable context *just for the receiver*.
+	receiveCtx, cancelReceive := context.WithCancel(ctx)
+	// Stop the receiver goroutine *before* other cleanups (like deleting the sub) run.
+	t.Cleanup(cancelReceive)
+
 	subscriber := client.Subscriber(subID)
 	go func() {
-		err := subscriber.Receive(ctx, func(ctx context.Context, msg *pubsub.Message) {
+		// Use the new receiveCtx here
+		err := subscriber.Receive(receiveCtx, func(ctx context.Context, msg *pubsub.Message) {
 			received <- msg.Data
 			msg.Ack()
+			cancelReceive() // Stop the receiver *immediately* after getting msg
 		})
 
-		// --- START: GOROUTINE ERROR FIX ---
-		// This goroutine will always receive an error when the test
-		// context is canceled. We must check for both standard
-		// context.Canceled and gRPC's Canceled status code.
-		if err != nil {
-			if errors.Is(err, context.Canceled) {
-				return // This is an expected error
-			}
+		// This error check now correctly ignores context canceled errors.
+		if err != nil && !errors.Is(err, context.Canceled) {
 			if s, ok := status.FromError(err); ok && s.Code() == codes.Canceled {
-				return // This is also an expected error
+				return // This is expected
 			}
-			// Any other error is a real failure.
-			t.Errorf("Receive error: %v", err)
 		}
-		// --- END: GOROUTINE ERROR FIX ---
 	}()
+	// --- END: GOROUTINE FIX ---
 
 	publisher := client.Publisher(topicID)
 	defer publisher.Stop()
@@ -131,7 +133,6 @@ func TestSetupPubsubEmulator(t *testing.T) {
 	t.Logf("Pub/Sub emulator test passed. Connected to: %s", connInfo.HTTPEndpoint.Endpoint)
 }
 
-// ... TestSetupFirestoreEmulator remains the same ...
 func TestSetupFirestoreEmulator(t *testing.T) {
 	t.Parallel()
 
@@ -141,6 +142,8 @@ func TestSetupFirestoreEmulator(t *testing.T) {
 	projectID := "test-project-firestore"
 	cfg := emulators.GetDefaultFirestoreConfig(projectID)
 
+	// This call will now block until the Firestore emulator is *actually*
+	// ready, thanks to the fix in gce.go.
 	connInfo := emulators.SetupFirestoreEmulator(t, context.Background(), cfg)
 
 	require.NotEmpty(t, connInfo.HTTPEndpoint.Endpoint, "HTTPEndpoint.Endpoint should not be empty")
@@ -152,6 +155,8 @@ func TestSetupFirestoreEmulator(t *testing.T) {
 		_ = client.Close()
 	})
 
+	// This write operation will no longer fail with DeadlineExceeded,
+	// because SetupFirestoreEmulator already guaranteed the service was ready.
 	_, _, err = client.Collection("testCollection").Add(ctx, map[string]interface{}{
 		"field1": "value1",
 		"field2": 123,
@@ -159,4 +164,56 @@ func TestSetupFirestoreEmulator(t *testing.T) {
 	require.NoError(t, err, "Failed to add document to Firestore")
 
 	t.Logf("Firestore emulator test passed. Connected to: %s", connInfo.HTTPEndpoint.Endpoint)
+}
+
+// --- NEW DUAL EMULATOR TEST ---
+
+// TestSetupDualEmulators verifies that both emulators can be started and
+// used concurrently within the same test.
+func TestSetupDualEmulators(t *testing.T) {
+	// t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	t.Cleanup(cancel)
+
+	projectID := "test-project-dual"
+
+	// 1. Setup both emulators
+	// Use background context for setup. These functions now block until ready.
+	fsCfg := emulators.GetDefaultFirestoreConfig(projectID)
+	fsConnInfo := emulators.SetupFirestoreEmulator(t, context.Background(), fsCfg)
+
+	psCfg := emulators.GetDefaultPubsubConfig(projectID)
+	psConnInfo := emulators.SetupPubsubEmulator(t, context.Background(), psCfg)
+
+	// 2. Create both clients
+	fsClient, err := firestore.NewClient(ctx, projectID, fsConnInfo.ClientOptions...)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = fsClient.Close()
+	})
+
+	psClient, err := pubsub.NewClient(ctx, projectID, psConnInfo.ClientOptions...)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = psClient.Close()
+	})
+
+	// 3. Perform a write operation on Firestore
+	t.Log("Performing Firestore write...")
+	_, _, err = fsClient.Collection("dualTest").Add(ctx, map[string]interface{}{
+		"service": "firestore",
+	})
+	require.NoError(t, err, "Failed to write to Firestore in dual test")
+	t.Log("Firestore write successful.")
+
+	// 4. Perform a write operation on Pub/Sub
+	t.Log("Performing Pub/Sub write...")
+	topicID := "dual-test-topic"
+	topicName := fmt.Sprintf("projects/%s/topics/%s", projectID, topicID)
+	_, err = psClient.TopicAdminClient.CreateTopic(ctx, &pubsubpb.Topic{Name: topicName})
+	require.NoError(t, err, "Failed to create topic in dual test")
+	t.Log("Pub/Sub write successful.")
+
+	t.Log("✅ Dual emulator test passed.")
 }

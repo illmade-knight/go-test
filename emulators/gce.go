@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"cloud.google.com/go/firestore" // IMPORTED
 	"cloud.google.com/go/pubsub/v2"
 	"github.com/docker/go-connections/nat"
 	"github.com/rs/zerolog/log"
@@ -103,8 +104,11 @@ func SetupPubsubEmulator(t *testing.T, ctx context.Context, cfg PubsubConfig) Em
 	clientOptions := getEmulatorOptions(emulatorHost)
 
 	// Verify connectivity by creating and immediately closing a client.
-	// The test itself is responsible for the lifecycle of its own client.
-	adminClient, err := pubsub.NewClient(ctx, cfg.ProjectID, clientOptions...)
+	// This acts as a robust "wait" for the gRPC service to be ready.
+	// We use a short, isolated timeout for this check.
+	verifyCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	adminClient, err := pubsub.NewClient(verifyCtx, cfg.ProjectID, clientOptions...)
 	require.NoError(t, err)
 	_ = adminClient.Close() // Close the temporary client.
 
@@ -156,9 +160,13 @@ func SetupFirestoreEmulator(t *testing.T, ctx context.Context, cfg FirestoreConf
 
 	clientOptions := getEmulatorOptions(emulatorHost)
 
-	// We can skip client verification here as it's covered by the
-	// Pub/Sub setup, which uses the same gcloud image and options pattern.
-	// The test will perform its own client creation.
+	// We mirror the Pub/Sub setup to prove gRPC is ready.
+	// This fixes the race condition that fails the dual test.
+	verifyCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	fsClient, err := firestore.NewClient(verifyCtx, cfg.ProjectID, clientOptions...)
+	require.NoError(t, err)
+	_ = fsClient.Close() // Close the temporary client.
 
 	return EmulatorConnectionInfo{
 		HTTPEndpoint: Endpoint{
