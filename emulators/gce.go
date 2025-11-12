@@ -137,7 +137,7 @@ func SetupFirestoreEmulator(t *testing.T, ctx context.Context, cfg FirestoreConf
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
-		termCtx, termCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		termCtx, termCancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer termCancel()
 		if err := container.Terminate(termCtx); err != nil {
 			log.Warn().Err(err).Msg("Failed to terminate Firestore emulator container")
