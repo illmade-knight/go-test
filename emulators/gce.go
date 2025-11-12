@@ -85,7 +85,9 @@ func SetupPubsubEmulator(t *testing.T, ctx context.Context, cfg PubsubConfig) Em
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
-		if err := container.Terminate(context.Background()); err != nil {
+		termCtx, termCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer termCancel()
+		if err := container.Terminate(termCtx); err != nil {
 			log.Warn().Err(err).Msg("Failed to terminate Pub/Sub emulator container")
 		}
 	})
