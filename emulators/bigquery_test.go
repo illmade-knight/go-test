@@ -3,17 +3,17 @@ package emulators
 import (
 	"context"
 	"reflect" // Added for reflect.DeepEqual in TestGetDefaultBigQueryConfig
+	"strings" // Added for checking "Already Exists" errors
 	"testing"
 	"time"
 
 	"cloud.google.com/go/bigquery"
+	"github.com/stretchr/testify/require" // Using require for fatal assertions
 )
 
 func TestSetupBigQueryEmulator(t *testing.T) {
-	t.Parallel() // Allow tests to run in parallel if supported by testcontainers
+	t.Parallel() // Allow tests to run in parallel
 
-	// Use a context with timeout for *test operations*, not container lifecycle.
-	// Pass context.Background() or a longer-lived context to testcontainers.GenericContainer.
 	testCtx, testCancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(testCancel)
 
@@ -21,7 +21,6 @@ func TestSetupBigQueryEmulator(t *testing.T) {
 	datasetName := "test_dataset"
 	tableName := "test_table"
 
-	// Define a simple schema struct for the table
 	type TestData struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
@@ -30,49 +29,52 @@ func TestSetupBigQueryEmulator(t *testing.T) {
 	cfg := GetDefaultBigQueryConfig(projectID, map[string]string{datasetName: tableName}, map[string]interface{}{tableName: TestData{}})
 
 	// --- Setup BigQuery Emulator ---
-	// Pass context.Background() to SetupBigQueryEmulator for container lifecycle
-	// This ensures the container termination is not prematurely canceled by testCtx.
+	// This now *only* starts the container.
 	connInfo := SetupBigQueryEmulator(t, context.Background(), cfg)
 
 	// --- Verify EmulatorConnectionInfo ---
-	if connInfo.HTTPEndpoint.Endpoint == "" {
-		t.Error("HTTPEndpoint.Endpoint is empty")
-	}
-	if connInfo.GRPCEndpoint.Endpoint == "" {
-		t.Error("GRPCEndpoint.Endpoint is empty")
-	}
-	if connInfo.HTTPEndpoint.Port == "" {
-		t.Error("HTTPEndpoint.Port is empty")
-	}
-	if connInfo.GRPCEndpoint.Port == "" {
-		t.Error("GRPCEndpoint.Port is empty")
-	}
-	if len(connInfo.ClientOptions) == 0 {
-		t.Error("ClientOptions are empty")
-	}
+	require.NotEmpty(t, connInfo.HTTPEndpoint.Endpoint, "HTTPEndpoint.Endpoint is empty")
+	require.NotEmpty(t, connInfo.GRPCEndpoint.Endpoint, "GRPCEndpoint.Endpoint is empty")
+	require.NotEmpty(t, connInfo.HTTPEndpoint.Port, "HTTPEndpoint.Port is empty")
+	require.NotEmpty(t, connInfo.GRPCEndpoint.Port, "GRPCEndpoint.Port is empty")
+	require.NotEmpty(t, connInfo.ClientOptions, "ClientOptions are empty")
 
-	// --- Test Connectivity ---
-	// Use testCtx for BigQuery client operations
+	// --- Test Connectivity & Resource Creation ---
 	client, err := bigquery.NewClient(testCtx, projectID, connInfo.ClientOptions...)
-	if err != nil {
-		t.Fatalf("Failed to create BigQuery client: %v", err)
-	}
+	require.NoError(t, err, "Failed to create BigQuery client")
 	t.Cleanup(func() {
 		_ = client.Close()
 	})
 
-	// Verify dataset and table exist (they should be pre-created by SetupBigQueryEmulator)
+	// --- REFACTOR ---
+	// This logic is now part of the test, not the setup function.
+	t.Log("Creating test dataset and table...")
+	for k, v := range cfg.DatasetTables {
+		err = client.Dataset(k).Create(testCtx, &bigquery.DatasetMetadata{Name: k})
+		if err != nil && !strings.Contains(err.Error(), "Already Exists") {
+			require.NoError(t, err, "Failed to create dataset")
+		}
+
+		table := client.Dataset(k).Table(v)
+		schemaType, ok := cfg.Schemas[v]
+		require.True(t, ok, "Schema not found for table %s", v)
+		schema, err := bigquery.InferSchema(schemaType)
+		require.NoError(t, err, "Failed to infer schema")
+		err = table.Create(testCtx, &bigquery.TableMetadata{Name: v, Schema: schema})
+		if err != nil && !strings.Contains(err.Error(), "Already Exists") {
+			require.NoError(t, err, "Failed to create table")
+		}
+	}
+	// --- End Refactor ---
+
+	// Verify dataset and table exist
 	ds := client.Dataset(datasetName)
 	_, err = ds.Metadata(testCtx) // Use testCtx for metadata operations
-	if err != nil {
-		t.Errorf("Failed to get dataset %q metadata: %v", datasetName, err)
-	}
+	require.NoError(t, err, "Failed to get dataset %q metadata", datasetName)
 
 	table := ds.Table(tableName)
 	_, err = table.Metadata(testCtx) // Use testCtx for metadata operations
-	if err != nil {
-		t.Errorf("Failed to get table %q metadata: %v", tableName, err)
-	}
+	require.NoError(t, err, "Failed to get table %q metadata", tableName)
 
 	t.Logf("BigQuery emulator test passed. Connected to HTTP: %s, gRPC: %s", connInfo.HTTPEndpoint.Endpoint, connInfo.GRPCEndpoint.Endpoint)
 }

@@ -3,7 +3,6 @@ package emulators
 import (
 	"context"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -14,18 +13,28 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
+// BigQueryConfig holds configuration specific to the BigQuery emulator.
 type BigQueryConfig struct {
 	GCImageContainer
+	// DatasetTables holds a map of dataset names to table names.
+	// This is used by the *test* to know what to create, not by the setup function.
 	DatasetTables map[string]string
-	Schemas       map[string]interface{}
+	// Schemas holds a map of table names to their Go struct schema.
+	// This is used by the *test* to infer and create the table schema.
+	Schemas map[string]interface{}
 }
 
 const (
+	// testBigQueryEmulatorImage is the default BigQuery emulator image.
 	testBigQueryEmulatorImage = "ghcr.io/goccy/bigquery-emulator:0.6.6"
-	testBigQueryGRPCPort      = "9060"
-	testBigQueryRestPort      = "9050"
+	// testBigQueryGRPCPort is the default gRPC port for the emulator.
+	testBigQueryGRPCPort = "9060"
+	// testBigQueryRestPort is the default REST port for the emulator.
+	testBigQueryRestPort = "9050"
 )
 
+// GetDefaultBigQueryConfig provides a default configuration for the BigQuery emulator.
+// The provided maps are used by the test to create resources.
 func GetDefaultBigQueryConfig(projectID string, datasetTables map[string]string, schemaMappings map[string]interface{}) BigQueryConfig {
 	return BigQueryConfig{
 		GCImageContainer: GCImageContainer{
@@ -42,6 +51,12 @@ func GetDefaultBigQueryConfig(projectID string, datasetTables map[string]string,
 	}
 }
 
+// SetupBigQueryEmulator starts a BigQuery emulator container.
+// It automatically handles container startup and teardown via t.Cleanup.
+//
+// This function *only* starts the emulator. It does NOT create any datasets or
+// tables. The test calling this function is responsible for creating its own
+// resources using the returned EmulatorConnectionInfo.
 func SetupBigQueryEmulator(t *testing.T, ctx context.Context, cfg BigQueryConfig) EmulatorConnectionInfo {
 	t.Helper()
 	httpPort := fmt.Sprintf("%s/tcp", cfg.EmulatorPort)
@@ -61,7 +76,12 @@ func SetupBigQueryEmulator(t *testing.T, ctx context.Context, cfg BigQueryConfig
 	}
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{ContainerRequest: req, Started: true})
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, container.Terminate(context.Background())) })
+
+	t.Cleanup(func() {
+		if err := container.Terminate(context.Background()); err != nil {
+			t.Logf("Failed to terminate BigQuery container: %v", err)
+		}
+	})
 
 	host, err := container.Host(ctx)
 	require.NoError(t, err)
@@ -72,33 +92,17 @@ func SetupBigQueryEmulator(t *testing.T, ctx context.Context, cfg BigQueryConfig
 
 	endpointGRPC := fmt.Sprintf("grpc://%s:%s", host, mappedGrpcPort.Port())
 	endpointHTTP := fmt.Sprintf("http://%s:%s", host, mappedRestPort.Port())
-
 	opts := getEmulatorOptions(endpointHTTP)
 
-	hostURL := fmt.Sprintf("%s:%s", host, mappedGrpcPort.Port())
-
+	// --- Key Refactor ---
+	// Removed the resource creation loop.
+	// We verify connectivity by creating a client, but we don't
+	// modify state.
 	client, err := bigquery.NewClient(ctx, cfg.ProjectID, opts...)
 	require.NoError(t, err)
-	defer func() {
-		_ = client.Close()
-	}()
+	_ = client.Close() // Close the temporary client immediately.
 
-	for k, v := range cfg.DatasetTables {
-		err = client.Dataset(k).Create(ctx, &bigquery.DatasetMetadata{Name: k})
-		if err != nil && !strings.Contains(err.Error(), "Already Exists") {
-			require.NoError(t, err)
-		}
-
-		table := client.Dataset(k).Table(v)
-		schemaType, ok := cfg.Schemas[v]
-		require.True(t, ok)
-		schema, err := bigquery.InferSchema(schemaType)
-		require.NoError(t, err)
-		err = table.Create(ctx, &bigquery.TableMetadata{Name: v, Schema: schema})
-		if err != nil && !strings.Contains(err.Error(), "Already Exists") {
-			require.NoError(t, err)
-		}
-	}
+	t.Logf("BigQuery emulator container started. HTTP: %s, gRPC: %s", endpointHTTP, endpointGRPC)
 
 	return EmulatorConnectionInfo{
 		HTTPEndpoint: Endpoint{
@@ -109,7 +113,6 @@ func SetupBigQueryEmulator(t *testing.T, ctx context.Context, cfg BigQueryConfig
 			Port:     grpcPort,
 			Endpoint: endpointGRPC,
 		},
-		EmulatorAddress: hostURL,
-		ClientOptions:   opts,
+		ClientOptions: opts,
 	}
 }

@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
-	// REFACTOR: Use the v2 pubsub import path.
 	"cloud.google.com/go/pubsub/v2"
 	"github.com/docker/go-connections/nat"
 	"github.com/rs/zerolog/log"
@@ -28,7 +28,7 @@ const (
 // PubsubConfig holds configuration specific to the Pub/Sub emulator.
 type PubsubConfig struct {
 	GCImageContainer
-	// REFACTOR: TopicSubs map is no longer needed as the v2 emulator auto-creates resources.
+	// Note: TopicSubs map is no longer needed as the v2 emulator auto-creates resources.
 }
 
 // FirestoreConfig holds configuration specific to the Firestore emulator.
@@ -63,17 +63,21 @@ func GetDefaultFirestoreConfig(projectID string) FirestoreConfig {
 }
 
 // SetupPubsubEmulator starts a Pub/Sub emulator container and configures it.
-// It returns client options for connecting to the emulator.
-// REFACTOR: Removed the v1 admin client and resource creation logic. The emulator
-// will create topics and subscriptions on first use.
+// It automatically handles container startup and teardown via t.Cleanup.
+// The v2 emulator will create topics and subscriptions on first use.
 func SetupPubsubEmulator(t *testing.T, ctx context.Context, cfg PubsubConfig) EmulatorConnectionInfo {
 	t.Helper()
 
 	httpPort := fmt.Sprintf("%s/tcp", cfg.EmulatorPort)
+	cmd := []string{
+		"gcloud", "beta", "emulators", "pubsub", "start",
+		fmt.Sprintf("--project=%s", cfg.ProjectID),
+		fmt.Sprintf("--host-port=0.0.0.0:%s", cfg.EmulatorPort),
+	}
 	req := testcontainers.ContainerRequest{
 		Image:        cfg.EmulatorImage,
 		ExposedPorts: []string{httpPort},
-		Cmd:          []string{"gcloud", "beta", "emulators", "pubsub", "start", fmt.Sprintf("--project=%s", cfg.ProjectID), fmt.Sprintf("--host-port=0.0.0.0:%s", cfg.EmulatorPort)},
+		Cmd:          cmd,
 		WaitingFor:   wait.ForListeningPort(nat.Port(cfg.EmulatorPort)),
 	}
 
@@ -96,13 +100,11 @@ func SetupPubsubEmulator(t *testing.T, ctx context.Context, cfg PubsubConfig) Em
 
 	clientOptions := getEmulatorOptions(emulatorHost)
 
-	// Verify connectivity by creating a client.
+	// Verify connectivity by creating and immediately closing a client.
+	// The test itself is responsible for the lifecycle of its own client.
 	adminClient, err := pubsub.NewClient(ctx, cfg.ProjectID, clientOptions...)
 	require.NoError(t, err)
-	// The client is closed by the test that calls this setup function.
-	t.Cleanup(func() {
-		_ = adminClient.Close()
-	})
+	_ = adminClient.Close() // Close the temporary client.
 
 	return EmulatorConnectionInfo{
 		HTTPEndpoint: Endpoint{
@@ -114,14 +116,20 @@ func SetupPubsubEmulator(t *testing.T, ctx context.Context, cfg PubsubConfig) Em
 }
 
 // SetupFirestoreEmulator starts a Firestore emulator container and configures it.
+// It automatically handles container startup and teardown via t.Cleanup.
 func SetupFirestoreEmulator(t *testing.T, ctx context.Context, cfg FirestoreConfig) EmulatorConnectionInfo {
 	t.Helper()
 
 	httpPort := fmt.Sprintf("%s/tcp", cfg.EmulatorPort)
+	cmd := []string{
+		"gcloud", "beta", "emulators", "firestore", "start",
+		fmt.Sprintf("--project=%s", cfg.ProjectID),
+		fmt.Sprintf("--host-port=0.0.0.0:%s", cfg.EmulatorPort),
+	}
 	req := testcontainers.ContainerRequest{
 		Image:        cfg.EmulatorImage,
 		ExposedPorts: []string{httpPort},
-		Cmd:          []string{"gcloud", "beta", "emulators", "firestore", "start", fmt.Sprintf("--project=%s", cfg.ProjectID), fmt.Sprintf("--host-port=0.0.0.0:%s", cfg.EmulatorPort)},
+		Cmd:          cmd,
 		WaitingFor:   wait.ForListeningPort(nat.Port(cfg.EmulatorPort)),
 	}
 
@@ -129,7 +137,9 @@ func SetupFirestoreEmulator(t *testing.T, ctx context.Context, cfg FirestoreConf
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
-		if err := container.Terminate(context.Background()); err != nil {
+		termCtx, termCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer termCancel()
+		if err := container.Terminate(termCtx); err != nil {
 			log.Warn().Err(err).Msg("Failed to terminate Firestore emulator container")
 		}
 	})
@@ -143,6 +153,10 @@ func SetupFirestoreEmulator(t *testing.T, ctx context.Context, cfg FirestoreConf
 	t.Logf("Firestore emulator container started, listening on: %s", emulatorHost)
 
 	clientOptions := getEmulatorOptions(emulatorHost)
+
+	// We can skip client verification here as it's covered by the
+	// Pub/Sub setup, which uses the same gcloud image and options pattern.
+	// The test will perform its own client creation.
 
 	return EmulatorConnectionInfo{
 		HTTPEndpoint: Endpoint{

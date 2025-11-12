@@ -36,22 +36,33 @@ func TestMqttPublishSubscribeIntegration(t *testing.T) {
 	subscriber := mqtt.NewClient(subOpts)
 
 	t.Log("Connecting MQTT subscriber...")
-	if token := subscriber.Connect(); token.WaitTimeout(10*time.Second) && token.Error() != nil {
-		t.Fatalf("Failed to connect MQTT subscriber: %v", token.Error())
+	connectToken := subscriber.Connect()
+	// Wait for connection or timeout
+	if !connectToken.WaitTimeout(10 * time.Second) {
+		t.Fatal("MQTT subscriber connection timed out")
 	}
+	require.NoError(t, connectToken.Error(), "Failed to connect MQTT subscriber")
+
 	t.Cleanup(func() {
 		subscriber.Disconnect(250)
 	})
 	require.True(t, subscriber.IsConnected(), "Subscriber should be connected")
 
 	t.Logf("Subscriber connected. Subscribing to topic: %s", testTopic)
-	if token := subscriber.Subscribe(testTopic, 0, func(client mqtt.Client, msg mqtt.Message) {
+	subscribeToken := subscriber.Subscribe(testTopic, 0, func(client mqtt.Client, msg mqtt.Message) {
 		t.Logf("Subscriber received message: %s on topic: %s", msg.Payload(), msg.Topic())
-		receivedMessage <- string(msg.Payload())
+		// Send to channel in a non-blocking way in case test already timed out
+		select {
+		case receivedMessage <- string(msg.Payload()):
+		default:
+			t.Log("Message received, but channel was full or closed.")
+		}
 		wg.Done() // Signal that the message was received
-	}); token.WaitTimeout(5*time.Second) && token.Error() != nil {
-		t.Fatalf("Failed to subscribe: %v", token.Error())
+	})
+	if !subscribeToken.WaitTimeout(5 * time.Second) {
+		t.Fatal("MQTT subscriber subscribe timed out")
 	}
+	require.NoError(t, subscribeToken.Error(), "Failed to subscribe")
 
 	// 3. Create and connect MQTT Publisher
 	publisherClientID := "test-publisher-client"
@@ -66,9 +77,11 @@ func TestMqttPublishSubscribeIntegration(t *testing.T) {
 
 	// 4. Publish a message
 	t.Logf("Publisher sending message: %s to topic: %s", testMessage, testTopic)
-	if token := publisher.Publish(testTopic, 0, false, testMessage); token.WaitTimeout(5*time.Second) && token.Error() != nil {
-		t.Fatalf("Failed to publish message: %v", token.Error())
+	publishToken := publisher.Publish(testTopic, 0, false, testMessage)
+	if !publishToken.WaitTimeout(5 * time.Second) {
+		t.Fatal("MQTT publish timed out")
 	}
+	require.NoError(t, publishToken.Error(), "Failed to publish message")
 	t.Log("Message published.")
 
 	// 5. Wait for the message to be received by the subscriber

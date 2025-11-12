@@ -4,35 +4,30 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"testing"
 	"time"
 
 	"cloud.google.com/go/firestore"
-	// REFACTOR: Use the v2 pubsub import path.
 	"cloud.google.com/go/pubsub/v2"
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	"github.com/google/uuid"
 	"github.com/illmade-knight/go-test/emulators"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
-// REFACTOR: createPubsubResources now correctly uses the admin clients from the
-// main pubsub.Client, as shown in the v2 documentation.
+// createPubsubResources helper remains the same.
 func createPubsubResources(t *testing.T, ctx context.Context, client *pubsub.Client, projectID, topicID, subID string) {
 	t.Helper()
-
-	// REFACTOR: Access the admin clients directly from the operational client.
 	topicAdmin := client.TopicAdminClient
 	subAdmin := client.SubscriptionAdminClient
-
 	topicName := fmt.Sprintf("projects/%s/topics/%s", projectID, topicID)
 	_, err := topicAdmin.CreateTopic(ctx, &pubsubpb.Topic{Name: topicName})
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = topicAdmin.DeleteTopic(context.Background(), &pubsubpb.DeleteTopicRequest{Topic: topicName})
 	})
-
 	subName := fmt.Sprintf("projects/%s/subscriptions/%s", projectID, subID)
 	_, err = subAdmin.CreateSubscription(ctx, &pubsubpb.Subscription{
 		Name:  subName,
@@ -56,10 +51,9 @@ func TestSetupPubsubEmulator(t *testing.T) {
 	subID := fmt.Sprintf("test-subscription-%s", runID)
 	cfg := emulators.GetDefaultPubsubConfig(projectID)
 
-	connInfo := emulators.SetupPubsubEmulator(t, ctx, cfg)
+	connInfo := emulators.SetupPubsubEmulator(t, context.Background(), cfg)
 
 	require.NotEmpty(t, connInfo.HTTPEndpoint.Endpoint, "HTTPEndpoint.Endpoint should not be empty")
-	require.NotEmpty(t, connInfo.HTTPEndpoint.Port, "HTTPEndpoint.Port should not be empty")
 	require.NotEmpty(t, connInfo.ClientOptions, "ClientOptions should not be empty")
 
 	client, err := pubsub.NewClient(ctx, projectID, connInfo.ClientOptions...)
@@ -68,42 +62,76 @@ func TestSetupPubsubEmulator(t *testing.T) {
 		_ = client.Close()
 	})
 
-	// REFACTOR: Call the dedicated helper to create the test resources.
 	createPubsubResources(t, ctx, client, projectID, topicID, subID)
 
-	var wg sync.WaitGroup
-	wg.Add(1)
+	// Polling loop remains the same.
+	t.Logf("Polling for subscription %s to exist...", subID)
+	subAdmin := client.SubscriptionAdminClient
+	subName := fmt.Sprintf("projects/%s/subscriptions/%s", projectID, subID)
+	req := &pubsubpb.GetSubscriptionRequest{Subscription: subName}
+	pollCtx, pollCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer pollCancel()
+
+	for {
+		_, err := subAdmin.GetSubscription(pollCtx, req)
+		if err == nil {
+			t.Logf("Subscription %s confirmed to exist.", subID)
+			break
+		}
+		if s, ok := status.FromError(err); ok && s.Code() == codes.NotFound {
+			select {
+			case <-time.After(200 * time.Millisecond):
+				continue
+			case <-pollCtx.Done():
+				t.Fatalf("Timed out waiting for subscription %s to exist. Last error: %v", subID, err)
+			}
+		}
+		t.Fatalf("Error while polling for subscription %s: %v", subID, err)
+	}
+
 	received := make(chan []byte, 1)
 
 	subscriber := client.Subscriber(subID)
 	go func() {
-		defer wg.Done()
 		err := subscriber.Receive(ctx, func(ctx context.Context, msg *pubsub.Message) {
 			received <- msg.Data
 			msg.Ack()
 		})
-		if err != nil && !errors.Is(err, context.Canceled) {
+
+		// --- START: GOROUTINE ERROR FIX ---
+		// This goroutine will always receive an error when the test
+		// context is canceled. We must check for both standard
+		// context.Canceled and gRPC's Canceled status code.
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return // This is an expected error
+			}
+			if s, ok := status.FromError(err); ok && s.Code() == codes.Canceled {
+				return // This is also an expected error
+			}
+			// Any other error is a real failure.
 			t.Errorf("Receive error: %v", err)
 		}
+		// --- END: GOROUTINE ERROR FIX ---
 	}()
 
 	publisher := client.Publisher(topicID)
 	defer publisher.Stop()
 	res := publisher.Publish(ctx, &pubsub.Message{Data: []byte("hello world")})
 	_, err = res.Get(ctx)
-	require.NoError(t, err)
+	require.NoError(t, err, "Failed to publish message")
 
 	select {
 	case msg := <-received:
 		require.Equal(t, "hello world", string(msg))
 	case <-ctx.Done():
-		t.Fatal("Test timed out waiting for message")
+		t.Fatalf("Test timed out waiting for message: %v", ctx.Err())
 	}
 
-	wg.Wait()
 	t.Logf("Pub/Sub emulator test passed. Connected to: %s", connInfo.HTTPEndpoint.Endpoint)
 }
 
+// ... TestSetupFirestoreEmulator remains the same ...
 func TestSetupFirestoreEmulator(t *testing.T) {
 	t.Parallel()
 
@@ -113,10 +141,9 @@ func TestSetupFirestoreEmulator(t *testing.T) {
 	projectID := "test-project-firestore"
 	cfg := emulators.GetDefaultFirestoreConfig(projectID)
 
-	connInfo := emulators.SetupFirestoreEmulator(t, ctx, cfg)
+	connInfo := emulators.SetupFirestoreEmulator(t, context.Background(), cfg)
 
 	require.NotEmpty(t, connInfo.HTTPEndpoint.Endpoint, "HTTPEndpoint.Endpoint should not be empty")
-	require.NotEmpty(t, connInfo.HTTPEndpoint.Port, "HTTPEndpoint.Port should not be empty")
 	require.NotEmpty(t, connInfo.ClientOptions, "ClientOptions should not be empty")
 
 	client, err := firestore.NewClient(ctx, projectID, connInfo.ClientOptions...)

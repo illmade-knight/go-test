@@ -18,16 +18,13 @@ func TestSetupRedisContainer(t *testing.T) {
 
 	cfg := GetDefaultRedisImageContainer()
 	// Pass context.Background() to SetupRedisContainer for container lifecycle
-	// This ensures the container termination is not prematurely canceled by testCtx.
 	connInfo := SetupRedisContainer(t, context.Background(), cfg)
 
 	// --- Verify EmulatorConnectionInfo ---
-	if connInfo.EmulatorAddress == "" { // Now check the dedicated RedisAddr field
-		t.Error("RedisAddr is empty")
-	}
+	require.NotEmpty(t, connInfo.EmulatorAddress, "EmulatorAddress is empty")
 
 	// --- Test Connectivity ---
-	redisAddr := connInfo.EmulatorAddress // Retrieve the address from the new field
+	redisAddr := connInfo.EmulatorAddress
 	rdb := redis.NewClient(&redis.Options{
 		Addr: redisAddr,
 		DB:   0, // use default DB

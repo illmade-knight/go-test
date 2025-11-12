@@ -2,6 +2,8 @@ package emulators
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func Test_getEmulatorOptions(t *testing.T) {
@@ -20,9 +22,7 @@ func Test_getEmulatorOptions(t *testing.T) {
 	// We can, however, verify the number of options returned if that's a
 	// specific contract we want to assert.
 	expectedNumOptions := 3 // WithEndpoint, WithoutAuthentication, WithGRPCDialOption
-	if len(opts) != expectedNumOptions {
-		t.Errorf("Expected %d client options, got %d", expectedNumOptions, len(opts))
-	}
+	require.Equal(t, expectedNumOptions, len(opts), "Expected %d client options, got %d", expectedNumOptions, len(opts))
 
 	t.Log("Direct comparison of google.golang.org/api/option.ClientOption types is not practical due to unexported internals.")
 	t.Log("Functionality of getEmulatorOptions is implicitly tested via successful client connections in other emulator setup tests.")

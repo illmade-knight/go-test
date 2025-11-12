@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require" // Using require for fatal assertions
 )
 
 func TestSetupGCSEmulator(t *testing.T) {
@@ -18,33 +20,29 @@ func TestSetupGCSEmulator(t *testing.T) {
 	cfg := GetDefaultGCSConfig(projectID, baseBucket)
 
 	// --- Setup GCS Emulator ---
-	// Pass context.Background() to SetupGCSEmulator for container lifecycle
-	// This ensures the container termination is not prematurely canceled by testCtx.
+	// This only starts the container and sets the env var.
 	connInfo := SetupGCSEmulator(t, context.Background(), cfg)
 
 	// --- Verify EmulatorConnectionInfo ---
-	if connInfo.HTTPEndpoint.Endpoint == "" {
-		t.Error("HTTPEndpoint.Endpoint is empty")
-	}
-	if connInfo.HTTPEndpoint.Port == "" {
-		t.Error("HTTPEndpoint.Port is empty")
-	}
-	if len(connInfo.ClientOptions) == 0 {
-		t.Error("ClientOptions are empty")
-	}
+	require.NotEmpty(t, connInfo.HTTPEndpoint.Endpoint, "HTTPEndpoint.Endpoint is empty")
+	require.NotEmpty(t, connInfo.HTTPEndpoint.Port, "HTTPEndpoint.Port is empty")
+	require.NotEmpty(t, connInfo.ClientOptions, "ClientOptions are empty")
 
-	// --- Test Connectivity (using GetStorageClient) ---
+	// --- Test Connectivity (using NewStorageClient) ---
 	// Use testCtx for GCS client operations
-	gcsClient := GetStorageClient(t, testCtx, cfg, connInfo.ClientOptions)
-	if gcsClient == nil {
-		t.Fatal("GetStorageClient returned nil client")
-	}
+	gcsClient := NewStorageClient(t, testCtx, connInfo.ClientOptions)
+	require.NotNil(t, gcsClient, "NewStorageClient returned nil client")
 
-	// Verify the base bucket exists (should be created by GetStorageClient)
-	_, err := gcsClient.Bucket(baseBucket).Attrs(testCtx) // Use testCtx for bucket operations
-	if err != nil {
-		t.Fatalf("Failed to get attributes for base bucket %q: %v", baseBucket, err)
-	}
+	// --- REFACTOR ---
+	// This logic is now part of the test, not the setup function.
+	t.Logf("Creating test bucket: %s", baseBucket)
+	err := gcsClient.Bucket(baseBucket).Create(testCtx, projectID, nil)
+	require.NoError(t, err, "Failed to create base bucket %q", baseBucket)
+	// --- End Refactor ---
+
+	// Verify the base bucket exists
+	_, err = gcsClient.Bucket(baseBucket).Attrs(testCtx) // Use testCtx for bucket operations
+	require.NoError(t, err, "Failed to get attributes for base bucket %q", baseBucket)
 
 	t.Logf("GCS emulator test passed. Connected to: %s", connInfo.HTTPEndpoint.Endpoint)
 }

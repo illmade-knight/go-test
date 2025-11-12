@@ -9,16 +9,20 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/docker/go-connections/nat" // Added for ForListeningPort
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 const (
+	// mosquitoImage is the default Eclipse Mosquitto image to use.
 	mosquitoImage = "eclipse-mosquitto:2.0"
-	mosquitoPort  = "1883"
+	// mosquitoPort is the default internal port for the Mosquitto broker.
+	mosquitoPort = "1883"
 )
 
+// GetDefaultMqttImageContainer returns a default configuration for the Mosquitto container.
 func GetDefaultMqttImageContainer() ImageContainer {
 	return ImageContainer{
 		EmulatorImage: mosquitoImage,
@@ -27,9 +31,13 @@ func GetDefaultMqttImageContainer() ImageContainer {
 }
 
 // SetupMosquittoContainer starts an MQTT (Mosquitto) emulator container.
-// It returns an EmulatorConnectionInfo struct with connection details.
-func SetupMosquittoContainer(t *testing.T, ctx context.Context, cfg ImageContainer) EmulatorConnectionInfo { // Changed return type
+// It automatically handles container startup, configuration, and teardown via t.Cleanup.
+// It returns an EmulatorConnectionInfo struct with the EmulatorAddress field populated
+// (e.g., "tcp://localhost:54321").
+func SetupMosquittoContainer(t *testing.T, ctx context.Context, cfg ImageContainer) EmulatorConnectionInfo {
 	t.Helper()
+
+	// Mosquitto requires a config file to allow anonymous access.
 	confPath := filepath.Join(t.TempDir(), "mosquitto.conf")
 	err := os.WriteFile(confPath, []byte("listener 1883\nallow_anonymous true\n"), 0644)
 	require.NoError(t, err)
@@ -39,24 +47,35 @@ func SetupMosquittoContainer(t *testing.T, ctx context.Context, cfg ImageContain
 	req := testcontainers.ContainerRequest{
 		Image:        cfg.EmulatorImage,
 		ExposedPorts: []string{port},
-		WaitingFor:   wait.ForLog("mosquitto version 2.0").WithStartupTimeout(60 * time.Second),
+		// REFACTOR: Changed from brittle ForLog to robust ForListeningPort.
+		WaitingFor: wait.ForListeningPort(nat.Port(port)).WithStartupTimeout(60 * time.Second),
 		Files:        []testcontainers.ContainerFile{{HostFilePath: confPath, ContainerFilePath: "/mosquitto/config/mosquitto.conf"}},
 	}
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{ContainerRequest: req, Started: true})
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, container.Terminate(context.Background())) })
+
+	t.Cleanup(func() {
+		if err := container.Terminate(context.Background()); err != nil {
+			t.Logf("Failed to terminate Mosquitto container: %v", err)
+		}
+	})
 
 	host, err := container.Host(ctx)
 	require.NoError(t, err)
-	mappedPort, err := container.MappedPort(ctx, "1883/tcp")
+	mappedPort, err := container.MappedPort(ctx, nat.Port(port)) // Use nat.Port(port) for consistency
 	require.NoError(t, err)
 	brokerURL := fmt.Sprintf("tcp://%s:%s", host, mappedPort.Port())
 
-	return EmulatorConnectionInfo{ // Populating the new struct
+	t.Logf("Mosquitto emulator container started, listening on: %s", brokerURL)
+
+	return EmulatorConnectionInfo{
 		EmulatorAddress: brokerURL,
 	}
 }
 
+// CreateTestMqttPublisher is a helper function that creates and connects an
+// MQTT client (publisher) to the specified broker URL.
+// It waits up to 10 seconds to connect.
 func CreateTestMqttPublisher(brokerURL, clientID string) (mqtt.Client, error) {
 	opts := mqtt.NewClientOptions().AddBroker(brokerURL).SetClientID(clientID)
 	client := mqtt.NewClient(opts)

@@ -13,19 +13,24 @@ import (
 )
 
 const (
-	// Redis Configuration (using a local container)
+	// cloudTestRedisImage is the default Redis image to use.
 	cloudTestRedisImage = "redis:8.0.2-alpine"
-	cloudTestRedisPort  = "6379/tcp"
+	// cloudTestRedisPort is the default internal port for Redis.
+	cloudTestRedisPort = "6379/tcp"
 )
 
+// GetDefaultRedisImageContainer returns a default configuration for the Redis container.
 func GetDefaultRedisImageContainer() ImageContainer {
 	return ImageContainer{
 		EmulatorImage: cloudTestRedisImage,
-		EmulatorPort:  cloudTestRedisPort, // This is the primary port for Redis
+		EmulatorPort:  cloudTestRedisPort,
 	}
 }
 
 // SetupRedisContainer starts a Redis container and returns its connection information.
+// It automatically handles container startup and teardown via t.Cleanup.
+// It returns an EmulatorConnectionInfo struct with the EmulatorAddress field populated
+// (e.g., "localhost:54321").
 func SetupRedisContainer(t *testing.T, ctx context.Context, imageContainer ImageContainer) EmulatorConnectionInfo {
 	t.Helper()
 	req := testcontainers.ContainerRequest{
@@ -35,9 +40,12 @@ func SetupRedisContainer(t *testing.T, ctx context.Context, imageContainer Image
 	}
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{ContainerRequest: req, Started: true})
 	require.NoError(t, err, "Failed to start Redis container")
+
 	t.Cleanup(func() {
-		require.NoError(t, container.Terminate(context.Background()))
-		t.Log("CLOUD E2E: Redis container terminated.")
+		if err := container.Terminate(context.Background()); err != nil {
+			t.Logf("Failed to terminate Redis container: %v", err)
+		}
+		t.Log("Redis container terminated.")
 	})
 
 	host, err := container.Host(ctx)
@@ -46,10 +54,9 @@ func SetupRedisContainer(t *testing.T, ctx context.Context, imageContainer Image
 	require.NoError(t, err)
 
 	redisAddr := fmt.Sprintf("%s:%s", host, port.Port())
-	t.Logf("CLOUD E2E: Redis container started at: %s", redisAddr)
+	t.Logf("Redis container started at: %s", redisAddr)
 
 	return EmulatorConnectionInfo{
-		EmulatorAddress: redisAddr, // Now explicitly set this field
-		// HTTPEndpoint, GRPCEndpoint, EmulatorAddress, and ClientOptions are not applicable for Redis and remain zero-valued.
+		EmulatorAddress: redisAddr,
 	}
 }

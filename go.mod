@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	cloud.google.com/go/bigquery v1.70.0
-	cloud.google.com/go/firestore v1.18.0
+	cloud.google.com/go/firestore v1.20.0
 	cloud.google.com/go/pubsub/v2 v2.0.0
 	cloud.google.com/go/storage v1.56.1
 	github.com/docker/go-connections v0.6.0
